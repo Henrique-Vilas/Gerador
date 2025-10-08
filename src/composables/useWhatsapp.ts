@@ -1,28 +1,46 @@
+// src/composables/useWhatsapp.ts
+
 export function toWhatsAppMessage(monthLabel: string, year: number) {
-  return `Escala de ${monthLabel} de ${year} gerada. Anexe o PDF.`
+  return `Escala de ${monthLabel} de ${year} gerada.`
 }
 
-export async function sharePdf(file: File, text: string) {
-  const ua = navigator.userAgent
-  const isMobile = /Android|iPhone|iPad|iPod/i.test(ua)
+function isMobileUA() {
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+}
 
-  const hasShare =
+/**
+ * Tenta compartilhar o PDF com Web Share (anexa o arquivo no WhatsApp em Android).
+ * Se o navegador não suportar "files" (ex.: iOS Safari), faz download e abre o link do WhatsApp com o texto.
+ * Retorna:
+ *  - 'shared'     -> share nativo executado (arquivo incluso)
+ *  - 'downloaded' -> fez download e abriu o WhatsApp com texto (arquivo não incluso automaticamente)
+ */
+export async function sharePdf(file: File, text: string) {
+  const title = file.name.replace(/\.pdf$/i, '')
+
+  const canShareFiles =
     typeof navigator !== 'undefined' &&
     'share' in navigator &&
     'canShare' in navigator &&
-    (navigator as any).canShare?.({ files: [file] })
+    // alguns browsers precisam explicitamente do campo files, type e name
+    (navigator as any).canShare?.({ files: [file] }) === true
 
-  // Tenta usar o share nativo (mostra o painel do sistema no Windows/macOS/Android)
-  if (hasShare) {
+  // Android + Chrome/Edge + WhatsApp instalado: anexa o arquivo
+  if (canShareFiles) {
     try {
-      await (navigator as any).share({ files: [file], text })
+      await (navigator as any).share({
+        files: [file],
+        text,
+        title
+      })
       return 'shared'
-    } catch (err) {
-      // Usuário cancelou ou o browser resolveu pirraçar. Cai no fallback.
+    } catch {
+      // usuário cancelou ou app rejeitou — cai no fallback
     }
   }
 
-  // Fallback universal: baixa o PDF e abre WhatsApp (Web no desktop, API no mobile)
+  // Fallback universal: baixa o PDF e abre WhatsApp com a mensagem
+  // iOS Safari NÃO suporta share com files via Web Share; melhor baixar e abrir o texto.
   const url = URL.createObjectURL(file)
   const a = document.createElement('a')
   a.href = url
@@ -32,11 +50,15 @@ export async function sharePdf(file: File, text: string) {
   a.remove()
   URL.revokeObjectURL(url)
 
-  const encoded = encodeURIComponent(text)
-  const link = isMobile
-    ? `https://api.whatsapp.com/send?text=${encoded}`
-    : `https://web.whatsapp.com/send?text=${encoded}`
+  const encoded = encodeURIComponent(`${text} Anexe o PDF baixado.`)
 
-  window.open(link, '_blank')
+  // mobile sem files -> app
+  if (isMobileUA()) {
+    window.open(`https://api.whatsapp.com/send?text=${encoded}`, '_blank')
+  } else {
+    // desktop -> web
+    window.open(`https://web.whatsapp.com/send?text=${encoded}`, '_blank')
+  }
+
   return 'downloaded'
 }
