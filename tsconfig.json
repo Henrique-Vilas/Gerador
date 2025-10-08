@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": { "@/*": ["src/*"] },
+    "types": ["vite/client", "node"],
+    "moduleResolution": "Bundler",
+    "strict": false
+  },
+  "include": ["src", "vite.config.ts"]
+}
