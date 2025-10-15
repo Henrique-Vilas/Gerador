@@ -11,32 +11,52 @@ import type { Employee } from '@/types'
 const { settings } = useStorage()
 
 const { rows, generate, monthLabel, updateEntryEmployee } = useSchedule(
-  () => settings.value.employees,
-  () => settings.value.month,
-  () => settings.value.year
+  () => settings.employees,
+  () => settings.month,
+  () => settings.year
 )
 
-const title = computed(() => `${monthLabel.value} de ${settings.value.year}`)
+const title = computed(() => `${monthLabel.value} de ${settings.year}`)
 const pdfRef = ref<HTMLElement | null>(null)
 const busy = ref(false)
 
-const messages = ref<{ id: string; msg: string; type: 'ok' | 'err' }[]>([])
+const messages = ref<{ id: string, msg: string, type: 'ok' | 'err' }[]>([])
 function toast(msg: string, type: 'ok' | 'err' = 'ok') {
-  messages.value.push({ id: crypto.randomUUID(), msg, type })
-  setTimeout(() => {
-    messages.value.shift()
-  }, 3000)
+  messages.value.push({ id: (crypto as any).randomUUID?.() ?? String(Math.random()), msg, type })
+  setTimeout(() => { messages.value.shift() }, 3000)
+}
+
+/* ========= Validação =========
+   Se houver funcionário sem nome (string vazia/whitespace),
+   exibe erro e foca o primeiro campo vazio. Retorna false para
+   cancelar a ação. Não desabilita botão; só barra a execução. */
+function validateNames(): boolean {
+  const missing = settings.employees.filter(e => !(e.name ?? '').trim())
+  if (missing.length === 0) return true
+
+  toast('Preencha os nomes de todos os funcionários.', 'err')
+
+  // foca o primeiro input vazio pelo aria-label usado no ControlsCard
+  const first = missing[0]
+  queueMicrotask(() => {
+    const sel = `input[aria-label="Nome do Funcionário ${first.order}"]`
+    const el = document.querySelector(sel) as HTMLInputElement | null
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el?.focus()
+  })
+
+  return false
 }
 
 async function handleExport() {
+  if (!validateNames()) return
   if (!pdfRef.value) return
   try {
     busy.value = true
-    const name = `Escala-${monthLabel.value}-${settings.value.year}.pdf`
-    const pdf = await withPdfExportClass(() =>
-      exportElementToPdf(pdfRef.value!, name)
+    const pdf = await withPdfExportClass(async () =>
+      await exportElementToPdf(pdfRef.value!, `escala-${monthLabel.value}-${settings.year}.pdf`)
     )
-    pdf.save(name)
+    pdf.save(`Escala-${monthLabel.value}-${settings.year}.pdf`)
     toast('PDF gerado com sucesso.')
   } catch (e: any) {
     toast(e?.message || 'Falha ao gerar PDF', 'err')
@@ -46,17 +66,23 @@ async function handleExport() {
 }
 
 async function handleShare() {
+  if (!validateNames()) return
   if (!pdfRef.value) return
   try {
     busy.value = true
-    const name = `Escala-${monthLabel.value}-${settings.value.year}.pdf`
-    const pdf = await withPdfExportClass(() =>
-      exportElementToPdf(pdfRef.value!, name)
+    const pdf = await withPdfExportClass(async () =>
+      await exportElementToPdf(pdfRef.value!, `escala-${monthLabel.value}-${settings.year}.pdf`)
     )
     const blob = pdf.output('blob') as Blob
-    const file = new File([blob], name, { type: 'application/pdf' })
-    const status = await sharePdf(file, toWhatsAppMessage(monthLabel.value, settings.value.year))
-    toast(status === 'shared' ? 'Compartilhado.' : 'PDF baixado. Abra o WhatsApp para enviar.')
+    const file = new File([blob], `Escala-${monthLabel.value}-${settings.year}.pdf`, { type: 'application/pdf' })
+    const status = await sharePdf(file, toWhatsAppMessage(monthLabel.value, settings.year))
+    toast(
+      status === 'shared'
+        ? 'Compartilhado pelo share nativo.'
+        : status === 'server-sent'
+        ? 'Enviado pelo backend (Cloud API).'
+        : 'PDF baixado. Abra o WhatsApp para enviar.'
+    )
   } catch (e: any) {
     toast(e?.message || 'Falha ao compartilhar', 'err')
   } finally {
@@ -65,6 +91,7 @@ async function handleShare() {
 }
 
 function onGenerate() {
+  if (!validateNames()) return
   try {
     generate()
     toast('Escala gerada.')
@@ -74,13 +101,12 @@ function onGenerate() {
 }
 
 function employeeById(id: string): Employee | undefined {
-  return settings.value.employees.find(e => e.id === id)
+  return settings.employees.find(e => e.id === id)
 }
 </script>
 
 <template>
   <div class="min-h-screen bg-gradient-to-b from-[#0b2447] to-[#0b4f3a] text-slate-900">
-    <!-- Topo com o nome do app -->
     <header class="pt-6 md:pt-8">
       <h1 class="text-center text-3xl md:text-4xl font-extrabold tracking-tight text-white drop-shadow">
         EscalaFácil
@@ -88,7 +114,6 @@ function employeeById(id: string): Employee | undefined {
     </header>
 
     <main class="max-w-[1100px] mx-auto px-4 sm:px-6 md:px-8">
-      <!-- Card centralizado -->
       <div class="flex justify-center">
         <ControlsCard
           @generate="onGenerate"
@@ -97,7 +122,6 @@ function employeeById(id: string): Employee | undefined {
         />
       </div>
 
-      <!-- Bloco capturado para PDF -->
       <div ref="pdfRef" class="w-full mt-6" data-pdf-root>
         <ScheduleTable
           :title="title"
@@ -106,24 +130,18 @@ function employeeById(id: string): Employee | undefined {
           @update:row="updateEntryEmployee"
         />
       </div>
-    </main>
 
-    <!-- toasts simples -->
-    <div class="fixed inset-x-0 bottom-4 flex flex-col items-center gap-2 px-4 pointer-events-none">
-      <div
-        v-for="m in messages"
-        :key="m.id"
-        class="pointer-events-auto rounded-lg px-4 py-2 text-white shadow-lg"
-        :class="m.type === 'ok' ? 'bg-emerald-600' : 'bg-rose-600'"
-      >
-        {{ m.msg }}
+      <!-- toasts -->
+      <div class="fixed bottom-4 left-1/2 -translate-x-1/2 space-y-2 w-[92vw] max-w-md z-50">
+        <div
+          v-for="m in messages"
+          :key="m.id"
+          class="rounded-lg px-3 py-2 text-white shadow"
+          :class="m.type === 'ok' ? 'bg-emerald-600' : 'bg-rose-600'"
+        >
+          {{ m.msg }}
+        </div>
       </div>
-    </div>
+    </main>
   </div>
 </template>
-
-<style>
-/* Garantir que o título e a palavra "Escala" fiquem pretos no PDF */
-html.pdf-export .export-black,
-html.pdf-export .export-black * { color: #000 !important; }
-</style>
