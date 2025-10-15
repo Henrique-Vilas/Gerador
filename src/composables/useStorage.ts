@@ -1,152 +1,174 @@
-import { ref, watch } from 'vue'
-import type { Settings, Employee } from '../types'
+// src/composables/useStorage.ts
+import { reactive, watch } from 'vue'
+import type { Employee } from '@/types'
 
-const STORAGE_KEY = 'gerador-escala:settings:v2' // versão sem persistir nomes
-
-// Paleta base (rosa, azul, roxo, laranja claro)
-const BASE_COLORS = ['#ec4899', '#0ea5e9', '#8b5cf6', '#f59e0b']
-
-type Persisted = {
+// -------------------- Tipos e Constantes --------------------
+type Settings = {
   count: number
   month: number
   year: number
-  employees: Array<{ id: string; order: number; color: string }>
+  employees: Employee[]
 }
 
-/* ================== Helpers de Cores ================== */
-// Converte HSL para HEX
-function hslToHex(h: number, s: number, l: number): string {
-  s /= 100; l /= 100
-  const k = (n: number) => (n + h / 30) % 12
-  const a = s * Math.min(l, 1 - l)
-  const f = (n: number) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)))
-  const toHex = (x: number) => Math.round(255 * x).toString(16).padStart(2, '0')
-  return `#${toHex(f(0))}${toHex(f(8))}${toHex(f(4))}`
+// versão nova p/ ignorar sujeira antiga
+const KEY = 'escala-settings-v3'
+
+// paleta base (rosa, turquesa, roxo, laranja claro)
+const PALETTE = ['#ec4899', '#06b6d4', '#8b5cf6', '#f59e0b']
+
+// -------------------- Helpers seguros --------------------
+function uid(): string {
+  try {
+    // @ts-ignore - nem todo TS conhece globalThis.crypto
+    if (globalThis?.crypto?.randomUUID) return globalThis.crypto.randomUUID()
+  } catch {}
+  // fallback: pseudo-uid
+  return 'id-' + Math.random().toString(16).slice(2) + Date.now().toString(16)
 }
 
-// Gera uma cor única não usada em `taken`. Primeiro tenta da paleta base sem repetir.
-// Se esgotar a base, gera cores novas no círculo de cores (golden angle) sem colisão.
-function pickUniqueColor(taken: string[], seed: number): string {
-  // 1) tenta pegar da paleta base sem repetir
-  for (const c of BASE_COLORS) {
-    if (!taken.includes(c.toLowerCase())) return c
-  }
-  // 2) gera cor HSL única
-  // usa ângulo dourado para espalhar tons e evita colisão exata
-  let i = 0
-  while (true) {
-    const hue = (seed * 137.508 + i * 23) % 360
-    const cand = hslToHex(hue, 70, 55).toLowerCase()
-    if (!taken.includes(cand)) return cand
-    i++
+function safeGetItem(key: string): string | null {
+  try {
+    if (typeof localStorage === 'undefined') return null
+    return localStorage.getItem(key)
+  } catch {
+    return null
   }
 }
 
-/* ================== Carregamento/Serialização ================== */
+function safeSetItem(key: string, value: string) {
+  try {
+    if (typeof localStorage === 'undefined') return
+    localStorage.setItem(key, value)
+  } catch {
+    // dane-se, só não travar
+  }
+}
 
-function sampleEmployees(n: number): Employee[] {
-  const out: Employee[] = []
+function makeEmployee(order: number, color: string): Employee {
+  // name SEMPRE vazio para o placeholder funcionar
+  return { id: uid(), order, name: '', color }
+}
+
+function pickColor(index: number, used: string[]) {
+  const free = PALETTE.find(c => !used.includes(c))
+  return free ?? PALETTE[index % PALETTE.length]
+}
+
+function seedEmployees(n: number): Employee[] {
+  const res: Employee[] = []
   const used: string[] = []
   for (let i = 0; i < n; i++) {
-    const color = pickUniqueColor(used, i)
-    used.push(color.toLowerCase())
-    out.push({
-      id: crypto.randomUUID(),
-      order: i + 1,
-      name: `Funcionário ${i + 1}`, // não persiste
-      color
-    })
+    const color = pickColor(i, used)
+    used.push(color)
+    res.push(makeEmployee(i + 1, color))
   }
-  return out
+  return res
 }
 
-function serialize(settings: Settings): Persisted {
-  return {
+// -------------------- Carregar estado --------------------
+function load(): Settings {
+  const now = new Date()
+  const fallback: Settings = {
+    count: 4,
+    month: now.getMonth(),
+    year: now.getFullYear(),
+    employees: seedEmployees(4)
+  }
+
+  const raw = safeGetItem(KEY)
+  if (!raw) return reactive(fallback) as Settings
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<Settings>
+
+    const month =
+      typeof parsed.month === 'number' && parsed.month >= 0 && parsed.month <= 11
+        ? parsed.month
+        : now.getMonth()
+
+    const year = typeof parsed.year === 'number' ? parsed.year : now.getFullYear()
+
+    const arr = Array.isArray(parsed.employees) ? parsed.employees : []
+    const employees: Employee[] =
+      arr.length > 0
+        ? arr.map((e, i) => ({
+            id: e?.id || uid(),
+            order: i + 1,
+            name: '', // limpa sempre
+            color: e?.color || PALETTE[i % PALETTE.length]
+          }))
+        : seedEmployees(typeof parsed.count === 'number' ? parsed.count : 4)
+
+    const count = Math.max(1, Math.min(20, employees.length || parsed.count || 4))
+
+    return reactive({ count, month, year, employees }) as Settings
+  } catch {
+    // JSON zoado? Vida que segue no fallback
+    return reactive(fallback) as Settings
+  }
+}
+
+const settings = load()
+
+// -------------------- Salvar estado (sem nomes) --------------------
+function save() {
+  const snapshot: Settings = {
     count: settings.count,
     month: settings.month,
     year: settings.year,
-    employees: settings.employees.map(e => ({
+    employees: settings.employees.map((e, i) => ({
       id: e.id,
-      order: e.order,
-      color: e.color, // NÃO salva nome
-    })),
-  }
-}
-
-function deserialize(p: Persisted | null): Settings {
-  if (!p) {
-    const now = new Date()
-    return {
-      count: 4,
-      month: now.getMonth(),
-      year: now.getFullYear(),
-      employees: sampleEmployees(4),
-    }
-  }
-  const employees: Employee[] = p.employees
-    .sort((a, b) => a.order - b.order)
-    .map(e => ({
-      id: e.id,
-      order: e.order,
-      name: `Funcionário ${e.order}`, // reconstrói placeholder
-      color: e.color,
+      order: i + 1,
+      name: '', // nunca persiste
+      color: e.color
     }))
-  return { count: p.count, month: p.month, year: p.year, employees }
-}
-
-function load(): Settings {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    const parsed = raw ? (JSON.parse(raw) as Persisted) : null
-    return deserialize(parsed)
-  } catch {
-    return deserialize(null)
   }
-}
-
-/* ================== Store Singleton ================== */
-
-const settings = ref<Settings>(load())
-
-function save() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(serialize(settings.value)))
+  safeSetItem(KEY, JSON.stringify(snapshot))
 }
 watch(settings, save, { deep: true })
 
-function setCount(n: number) {
-  const curr = settings.value.employees.slice().sort((a, b) => a.order - b.order)
-  if (n > curr.length) {
-    // adiciona funcionários com cores únicas
-    const used = curr.map(e => e.color.toLowerCase())
-    const start = curr.length + 1
-    const extra: Employee[] = []
-    for (let i = 0; i < n - curr.length; i++) {
-      const color = pickUniqueColor(used, start + i)
-      used.push(color.toLowerCase())
-      extra.push({
-        id: crypto.randomUUID(),
-        order: start + i,
-        name: `Funcionário ${start + i}`,
-        color
-      })
-    }
-    settings.value.employees = curr.concat(extra)
-  } else {
-    settings.value.employees = curr.slice(0, n)
-  }
-  settings.value.count = n
-}
-
-function updateEmployee(id: string, patch: Partial<Employee>) {
-  const arr = settings.value.employees
-  const idx = arr.findIndex(e => e.id === id)
-  if (idx >= 0) {
-    const { order } = arr[idx]
-    arr[idx] = { ...arr[idx], ...patch, order }
-    // se o usuário trocar a cor manualmente, respeitamos (pode repetir por decisão dele)
-  }
-}
-
+// -------------------- API pública compatível --------------------
 export function useStorage() {
-  return { settings, setCount, updateEmployee, save }
+  function setCount(n: number) {
+    n = Math.max(1, Math.min(20, n))
+
+    if (n > settings.employees.length) {
+      const toAdd = n - settings.employees.length
+      const used = settings.employees.map(e => e.color)
+      for (let i = 0; i < toAdd; i++) {
+        const color = pickColor(settings.employees.length + i, used)
+        used.push(color)
+        settings.employees.push(makeEmployee(settings.employees.length + 1, color))
+      }
+    } else if (n < settings.employees.length) {
+      settings.employees.splice(n)
+    }
+
+    settings.employees.forEach((e, i) => (e.order = i + 1))
+    settings.count = n
+  }
+
+  function setMonth(m: number) {
+    settings.month = m
+  }
+
+  function setYear(y: number) {
+    settings.year = y
+  }
+
+  function updateEmployee(id: string, patch: Partial<Employee>) {
+    const e = settings.employees.find(x => x.id === id)
+    if (!e) return
+    if (typeof patch.name === 'string') e.name = patch.name // fica só em memória
+    if (typeof patch.color === 'string') e.color = patch.color
+    if (typeof patch.order === 'number') e.order = patch.order
+  }
+
+  return {
+    settings,
+    setCount,
+    setMonth,
+    setYear,
+    updateEmployee
+  }
 }
