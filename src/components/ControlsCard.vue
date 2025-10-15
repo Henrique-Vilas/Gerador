@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { useStorage } from '../composables/useStorage'
+import { computed, ref } from 'vue'
+import { useStorage } from '@/composables/useStorage'
 
-const emit = defineEmits<{ (e: 'generate'): void, (e: 'export'): void, (e: 'share'): void }>()
-
+const emit = defineEmits<{ (e: 'generate'): void; (e: 'export'): void; (e: 'share'): void }>()
 const { settings, setCount, updateEmployee } = useStorage()
 
 const years = computed(() => {
@@ -12,12 +11,33 @@ const years = computed(() => {
 })
 
 const months = [
-  'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
-  'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
+  'Janeiro','Fevereiro','Março','Abril','Maio','Junho',
+  'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'
 ]
 
-// rosa, azul turquesa, roxo, laranja claro
-const suggested = ['#ec4899', '#0ea5e9', '#8b5cf6', '#f59e0b']
+// paleta: rosa, turquesa, roxo, laranja claro
+const suggested = ['#ec4899', '#06b6d4', '#8b5cf6', '#f59e0b']
+
+/* -------- Placeholders reais nos selects -------- */
+const uiCount = ref<string>('')   // '' => mostra "Selecione a quantidade"
+const uiMonth = ref<string>('')   // '' => mostra "Selecione o mês"
+
+function onChangeCount(ev: Event) {
+  const v = (ev.target as HTMLSelectElement).value
+  uiCount.value = v
+  if (v !== '') setCount(parseInt(v, 10))
+}
+
+function onChangeMonth(ev: Event) {
+  const v = (ev.target as HTMLSelectElement).value
+  uiMonth.value = v
+  if (v !== '') settings.month = parseInt(v, 10)
+}
+
+/* Mostrar os cartões somente após escolher quantidade e mês */
+const canShowEmployees = computed(() => uiCount.value !== '' && uiMonth.value !== '')
+
+function placeholderLabel(order: number) { return `Funcionário ${order}` }
 </script>
 
 <template>
@@ -26,29 +46,35 @@ const suggested = ['#ec4899', '#0ea5e9', '#8b5cf6', '#f59e0b']
     aria-label="Configurações da escala"
   >
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <!-- Quantidade -->
       <label class="flex flex-col gap-1">
         <span class="text-sm font-medium">Quantidade de funcionários</span>
         <select
-          class="h-11 rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring focus:ring-blue-200"
-          :value="settings.count"
-          @change="setCount(parseInt(($event.target as HTMLSelectElement).value))"
+          class="h-11 w-full rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring focus:ring-blue-200 appearance-none"
+          :value="uiCount"
+          @change="onChangeCount"
           aria-label="Quantidade de funcionários"
         >
-          <option v-for="n in 20" :key="n" :value="n">{{ n }}</option>
+          <option value="" disabled>Selecione a quantidade</option>
+          <option v-for="n in 20" :key="n" :value="String(n)">{{ n }}</option>
         </select>
       </label>
 
+      <!-- Mês -->
       <label class="flex flex-col gap-1">
         <span class="text-sm font-medium">Mês</span>
         <select
-          class="h-11 rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring focus:ring-blue-200"
-          v-model.number="settings.month"
+          class="h-11 w-full rounded-lg border border-gray-300 px-3 focus:outline-none focus:ring focus:ring-blue-200 appearance-none"
+          :value="uiMonth"
+          @change="onChangeMonth"
           aria-label="Selecione o mês"
         >
-          <option v-for="(m, idx) in months" :key="m" :value="idx">{{ m }}</option>
+          <option value="" disabled>Selecione o mês</option>
+          <option v-for="(m, idx) in months" :key="m" :value="String(idx)">{{ m }}</option>
         </select>
       </label>
 
+      <!-- Ano -->
       <label class="flex flex-col gap-1">
         <span class="text-sm font-medium">Ano</span>
         <select
@@ -61,20 +87,18 @@ const suggested = ['#ec4899', '#0ea5e9', '#8b5cf6', '#f59e0b']
       </label>
     </div>
 
-    <!-- ==== CARDS DE FUNCIONÁRIOS (com número e placeholder) ==== -->
-    <div class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+    <!-- Cartões de funcionários só depois de escolher quantidade + mês -->
+    <div v-if="canShowEmployees" class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
       <div
         v-for="emp in settings.employees"
         :key="emp.id"
         class="relative min-w-0 rounded-xl border border-gray-200 bg-offwhite p-3 flex items-center gap-3"
       >
-        <!-- Número da ordem -->
         <span
           class="absolute -top-2 -left-2 w-6 h-6 rounded-full bg-gray-900 text-white text-xs font-bold flex items-center justify-center shadow"
           aria-hidden="true"
         >{{ emp.order }}</span>
 
-        <!-- Cor -->
         <div class="w-11 h-11 shrink-0 rounded-lg border border-gray-300 overflow-hidden">
           <input
             type="color"
@@ -85,14 +109,13 @@ const suggested = ['#ec4899', '#0ea5e9', '#8b5cf6', '#f59e0b']
           />
         </div>
 
-        <!-- Nome (placeholder Funcionario N; valor não persiste após reload) -->
         <div class="flex-1 min-w-0">
           <label class="text-xs text-gray-600">Nome</label>
           <input
             :value="emp.name"
             @input="updateEmployee(emp.id, { name: ($event.target as HTMLInputElement).value })"
             class="mt-1 w-full h-11 px-3 rounded-lg border border-gray-300 focus:outline-none focus:ring focus:ring-blue-200 min-w-0"
-            :placeholder="`Funcionário ${emp.order}`"
+            :placeholder="placeholderLabel(emp.order)"
             :aria-label="`Nome do Funcionário ${emp.order}`"
           />
           <div class="mt-2 flex flex-wrap gap-2 items-center">
