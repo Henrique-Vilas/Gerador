@@ -145,7 +145,7 @@ function placeholderLabel(order: number) { return `Funcionário ${order}` }
       <button
         class="h-11 px-4 rounded-xl bg-gray-900 text-white hover:bg-black active:scale-[0.99]"
         @click="emit('share')"
-      >Enviar para WhatsApp</button>
+      >Enviar pelo WhatsApp</button>
     </div>
   </section>
 </template>
